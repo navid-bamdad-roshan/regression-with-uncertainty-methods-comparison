@@ -1,0 +1,18 @@
+# VS Code
+.vscode/
+
+# Data folder
+data/
+
+# Python virtual environment
+/env
+/venv
+/.venv
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Anything local
+*.local.*
