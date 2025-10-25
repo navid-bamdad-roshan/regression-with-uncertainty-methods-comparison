@@ -121,7 +121,7 @@ class MeanVarianceModelTrainer(BaselineModelTrainer):
         return nll_loss.item()
 
 
-class MonteCarloDropoutTModelrainer(BaselineModelTrainer):
+class MonteCarloDropoutModelTrainer(BaselineModelTrainer):
     def __init__(self, model, dataset, num_epochs=100, batch_size=32, learning_rate=0.001, mc_samples=10, device='cpu'):
         self.model = model
         self.dataset = dataset
@@ -153,6 +153,88 @@ class MonteCarloDropoutTModelrainer(BaselineModelTrainer):
         self.optimizer.step()
 
         return loss.item()
+
+
+class MonteCarloDropoutMeanSTDModelTrainer(BaselineModelTrainer):
+    def __init__(self, model, dataset, num_epochs=100, batch_size=32, learning_rate=0.001, mc_samples=10, device='cpu'):
+        self.model = model
+        self.dataset = dataset
+        self.num_epochs = num_epochs
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.device = device
+        self.mc_samples = mc_samples
+    
+        # Define optimizer
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+
+    def forward_and_backward(self, inputs, targets):
+
+        # Forward pass with MC Dropout
+        pred_mean = []
+        pred_log_std = []
+        for _ in range(self.mc_samples):
+            mean, log_std = self.model(inputs)
+            pred_mean.append(mean)
+            pred_log_std.append(log_std)
+        pred_mean = torch.stack(pred_mean)  # Shape: (mc_samples, batch_size, output_size)
+        pred_log_std = torch.stack(pred_log_std)  # Shape: (mc_samples, batch_size, output_size)
+        pred_mean = pred_mean.mean(dim=0)
+        pred_log_std = pred_log_std.mean(dim=0)
+
+        dist_obj = self.model.get_dist_obj(pred_mean, pred_log_std)
+
+        # Compute negative log likelihood loss
+        nll_loss = -dist_obj.log_prob(targets).mean()
+
+        # Zero the gradients
+        self.optimizer.zero_grad()
+        # Backward pass and optimization
+        nll_loss.backward()
+        self.optimizer.step()
+
+        return nll_loss.item()
+
+
+
+class MonteCarloDropoutMeanVarianceModelTrainer(BaselineModelTrainer):
+    def __init__(self, model, dataset, num_epochs=100, batch_size=32, learning_rate=0.001, mc_samples=10, device='cpu'):
+        self.model = model
+        self.dataset = dataset
+        self.num_epochs = num_epochs
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.device = device
+        self.mc_samples = mc_samples
+    
+        # Define optimizer
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+
+    def forward_and_backward(self, inputs, targets):
+
+        # Forward pass with MC Dropout
+        pred_mean = []
+        pred_log_vaiance = []
+        for _ in range(self.mc_samples):
+            mean, log_vaiance = self.model(inputs)
+            pred_mean.append(mean)
+            pred_log_vaiance.append(log_vaiance)
+        pred_mean = torch.stack(pred_mean)  # Shape: (mc_samples, batch_size, output_size)
+        pred_log_vaiance = torch.stack(pred_log_vaiance)  # Shape: (mc_samples, batch_size, output_size)
+        pred_mean = pred_mean.mean(dim=0)
+        pred_log_vaiance = pred_log_vaiance.mean(dim=0)
+
+        # Compute negative log likelihood loss
+        nll_loss = (0.5 * pred_log_vaiance) + (((targets - pred_mean) ** 2) / (2 * torch.exp(pred_log_vaiance)))
+        nll_loss = nll_loss.mean()
+
+        # Zero the gradients
+        self.optimizer.zero_grad()
+        # Backward pass and optimization
+        nll_loss.backward()
+        self.optimizer.step()
+
+        return nll_loss.item()
 
 
 class PPOModelTrainer(BaselineModelTrainer):
@@ -205,8 +287,14 @@ class PPOModelTrainer(BaselineModelTrainer):
             old_log_probs = dist_obj.log_prob(sampled_preds).sum(dim=-1)  # Shape: (sample_size, batch_size)
 
             rewards = -((sampled_preds - targets.unsqueeze(0)) ** 2).mean(dim=-1)  # Shape: (sample_size, batch_size)
+            
+            # No need for GAE calculation to compute advantages since this prediction is completely independent to other predictions.
+            # Advantages is just computed by subracting expected reward (value) from current received reward.
+            # Positive and higher advantage means the received reward was better than the expected reward.
+            # Negative and lower advantage means the received reward was worse than the expected reward.
             advantages = rewards - y_value.unsqueeze(0).squeeze(-1)  # Shape: (sample_size, batch_size)
 
+            # normalizing the advantage
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         for i in range(self.learn_steps):
@@ -230,7 +318,9 @@ class PPOModelTrainer(BaselineModelTrainer):
             ppo_objective = torch.min(prob_ratio * advantages, clipped_ratio * advantages)  # Shape: (sample_size, batch_size)
             ppo_loss = -ppo_objective.mean()
 
-            loss = ppo_loss + 0.5 * value_loss + 0.01 * entropy_loss
+            # using a bigger entopy loss since the log_std of each instance is also 
+            # predicted by model based on input features instead of a shared learnable parameter for all instances.
+            loss = ppo_loss + 0.5 * value_loss + 0.9 * entropy_loss 
 
             # Zero the gradients
             self.optimizer.zero_grad()

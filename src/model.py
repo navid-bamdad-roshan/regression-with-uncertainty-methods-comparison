@@ -121,6 +121,41 @@ class MonteCarloDropoutModel(torch.nn.Module):
         std_pred = preds.std(dim=0)
         return mean_pred, std_pred
 
+
+
+class MonteCarloDropoutMeanSTDModel(torch.nn.Module):
+    def __init__(self, input_size, output_size, hidden_sizes=[64, 64, 32, 32], dropout_prob=0.3):
+        super().__init__()
+        self.base = BaseModel(input_size, hidden_sizes, dropout_prob=dropout_prob)
+        self.output_mean = torch.nn.Linear(hidden_sizes[-1], output_size)
+        self.output_std = torch.nn.Linear(hidden_sizes[-1], output_size)
+
+    def forward(self, x):
+        x = self.base(x)
+        x_mean = self.output_mean(x)
+        x_log_std = self.output_std(x)
+        return x_mean, x_log_std
+    
+    def get_dist_obj(self, y_mean, y_log_std):
+        y_std = torch.exp(y_log_std)
+        return Normal(loc=y_mean, scale=y_std)
+    
+    def predict(self, x, num_samples=10):
+        self.train()  # Enable dropout
+        pred_means = []
+        pred_log_stds = []
+        with torch.no_grad():
+            for _ in range(num_samples):
+                pred_mean, pred_log_std = self.forward(x)
+                pred_means.append(pred_mean.unsqueeze(0))
+                pred_log_stds.append(pred_log_std.unsqueeze(0))
+        pred_means = torch.cat(pred_means, dim=0)  # Shape: (num_samples, batch_size, output_size)
+        pred_log_stds = torch.cat(pred_log_stds, dim=0)  # Shape: (num_samples, batch_size, output_size)
+        mean_pred = pred_means.mean(dim=0)
+        std_pred = torch.exp(pred_log_stds).mean(dim=0) #* pred_means.std(dim=0)
+        # std_pred = pred_means.std(dim=0)
+        return mean_pred, std_pred
+
     
 
 class PPOModel(torch.nn.Module):

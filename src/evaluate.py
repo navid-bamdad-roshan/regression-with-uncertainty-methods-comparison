@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 def evaluate_model(model, train_dataset, test_dataset, device='cpu'):
     """
@@ -29,12 +29,10 @@ def evaluate_model(model, train_dataset, test_dataset, device='cpu'):
         # Make trian predictions
         y_train_pred, y_train_uncertainty = model.predict(X_train)
         y_train_pred = y_train_pred.cpu().numpy()
-        y_train_uncertainty = y_train_uncertainty.cpu().numpy()
 
         # Make test predictions
         y_test_pred, y_test_uncertainty = model.predict(X_test)
         y_test_pred = y_test_pred.cpu().numpy()
-        y_test_uncertainty = y_test_uncertainty.cpu().numpy()
 
     # Move true labels to CPU for metrics and plotting
     y_train_true = y_train_true.cpu().numpy()
@@ -86,8 +84,6 @@ def evaluate_models_mse(models, titles, train_dataset, test_dataset, device='cpu
         titles (list): list of strings for model names (same length as models).
         train_dataset, test_dataset: datasets with .features and .labels (tensors).
         device (str): 'cpu' or 'cuda'.
-    Returns:
-        (train_mses, test_mses) lists of floats.
     """
     if len(models) != len(titles):
         raise ValueError("models and titles must have the same length")
@@ -143,7 +139,6 @@ def evaluate_models_mse(models, titles, train_dataset, test_dataset, device='cpu
     plt.tight_layout()
     plt.show()
 
-    return train_mses, test_mses
 
 
 def evaluate_models_true_vs_pred(models, titles, train_dataset, test_dataset, device='cpu', cmap_name='tab10', markersize=20):
@@ -286,7 +281,7 @@ def plot_mse_vs_uncertainty_quantile(models, titles, train_dataset, test_dataset
             if uncertainty_train is None:
                 mask_train = np.full(y_train_true.shape, fill_value=True)
             else:
-                thresh_train = np.quantile(uncertainty_train, q)
+                thresh_train = np.quantile(uncertainty_train, 1-q)
                 mask_train = uncertainty_train <= thresh_train
 
             # if somehow mask is empty, skip
@@ -300,9 +295,9 @@ def plot_mse_vs_uncertainty_quantile(models, titles, train_dataset, test_dataset
             if uncertainty_test is None:
                 mask_test = np.full(y_test_true.shape, fill_value=True)
             else:
-                thresh_test = np.quantile(uncertainty_test, q)
+                thresh_test = np.quantile(uncertainty_test, 1-q)
                 mask_test = uncertainty_test <= thresh_test
-            
+                       
             # if somehow mask is empty, skip
             if np.sum(mask_test) == 0:
                 mse_values_test.append(np.nan)
@@ -310,8 +305,8 @@ def plot_mse_vs_uncertainty_quantile(models, titles, train_dataset, test_dataset
                 mse = mean_squared_error(y_test_true[mask_test], pred_test[mask_test])
                 mse_values_test.append(mse)
 
-        axes[0].plot(quantiles[::-1], mse_values_train, label=title, color=color, marker='o', linewidth=2)
-        axes[1].plot(quantiles[::-1], mse_values_test, label=title, color=color, marker='o', linewidth=2)
+        axes[0].plot(quantiles, mse_values_train, label=title, color=color, marker='o', linewidth=2)
+        axes[1].plot(quantiles, mse_values_test, label=title, color=color, marker='o', linewidth=2)
     
 
     axes[0].set_title("Train MSE vs. Uncertainty Quantile Threshold")
@@ -326,6 +321,101 @@ def plot_mse_vs_uncertainty_quantile(models, titles, train_dataset, test_dataset
     axes[1].grid(True)
     axes[1].legend()
     
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_uncertainty_grid(models, titles, test_dataset, device='cpu', quantiles=None, cmap_name='tab10', markersize=8):
+    """
+    Create a grid of scatter plots with shape (len(quantiles), len(models)).
+    Rows = quantiles (i), Cols = models (j).
+    For each cell (q, m) plot test instances where model uncertainty <= quantile threshold
+    with alpha=0.7 and the other instances with alpha=0.3. X axis = true values, Y axis = predictions.
+
+    Args:
+        models (list): list of models (or objects with predict method returning (pred, uncertainty))
+        titles (list): list of model names (same length as models)
+        test_dataset: datasets having .features and .labels (tensors)
+        device (str): 'cpu' or 'cuda'
+        quantiles (array-like): quantile values in (0,1). If None defaults to np.linspace(0.1,0.9,5)
+        cmap_name (str): matplotlib colormap name for assigning a unique color per model
+        markersize (int): scatter marker size
+    """
+    if len(models) != len(titles):
+        raise ValueError("models and titles must have the same length")
+
+    if quantiles is None:
+        quantiles = np.linspace(0, 0.8, 6)
+    quantiles = np.asarray(quantiles)
+    n_q = len(quantiles)
+    n_m = len(models)
+
+    cmap = plt.get_cmap(cmap_name)
+    colors = [cmap(i % cmap.N) for i in range(n_m)]
+
+    # use test set for these plots
+    X = test_dataset.features.to(device)
+    y_true = test_dataset.labels.cpu().numpy().ravel()
+
+    # prepare figure
+    fig, axes = plt.subplots(nrows=n_q, ncols=n_m, figsize=(4 * n_m, 3 * n_q), squeeze=False)
+
+    for j, (m, title) in enumerate(zip(models, titles)):
+        m.to(device)
+        m.eval()
+        with torch.no_grad():
+            pred, uncertainty = m.predict(X)
+            # support models that return only prediction
+            if isinstance(pred, tuple) or isinstance(pred, list):
+                pred = pred[0]
+            pred = pred.cpu().numpy().ravel()
+            if uncertainty is not None:
+                uncertainty = uncertainty.cpu().numpy().ravel()
+        # compute common limits for nicer view
+        all_vals = np.concatenate([y_true, pred])
+        vmin, vmax = np.nanmin(all_vals), np.nanmax(all_vals)
+        pad = (vmax - vmin) * 0.03 if vmax > vmin else 0.1
+        lims = (vmin - pad, vmax + pad)
+
+        color = colors[j]
+
+        for i_q, q in enumerate(quantiles):
+            ax = axes[i_q, j]
+
+            if uncertainty is None:
+                # if no uncertainty available, mark all as "low" (alpha 0.7)
+                mask_low = np.ones_like(y_true, dtype=bool)
+            else:
+                thresh = np.quantile(uncertainty, 1-q)
+                mask_low = uncertainty <= thresh
+
+            # low uncertainty points
+            ax.scatter(y_true[mask_low], pred[mask_low], color=color, alpha=0.7, s=markersize)
+            # high uncertainty points
+            if np.any(~mask_low):
+                ax.scatter(y_true[~mask_low], pred[~mask_low], color=color, alpha=0.05, s=markersize)
+
+            # diagonal
+            ax.plot(lims, lims, 'k--', linewidth=0.8)
+            ax.set_xlim(lims)
+            ax.set_ylim(lims)
+
+            # labels: only left column gets y label, only bottom row gets x label
+            if j == 0:
+                ax.set_ylabel(f"Predicted")
+            if i_q == n_q - 1:
+                ax.set_xlabel("True")
+
+            # titles on top row
+            if i_q == 0:
+                ax.set_title(title)
+
+            # annotate quantile on the left of the row
+            if j == 0:
+                ax.text(0.01, 0.95, f"confidence={q:.2f}", transform=ax.transAxes, va='top', ha='left', fontsize=20, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
+
+            ax.grid(True)
+
     plt.tight_layout()
     plt.show()
 
