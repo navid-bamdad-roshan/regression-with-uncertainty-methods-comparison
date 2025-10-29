@@ -58,13 +58,13 @@ class MeanSTDModel(torch.nn.Module):
         super().__init__()
         self.base = BaseModel(input_size, hidden_sizes, dropout_prob=dropout_prob)
         self.output_mean = torch.nn.Linear(hidden_sizes[-1], output_size)
-        self.output_std = torch.nn.Linear(hidden_sizes[-1], output_size)
+        self.output_log_std = torch.nn.Linear(hidden_sizes[-1], output_size)
 
 
     def forward(self, x):
         x = self.base(x)
         x_mean = self.output_mean(x)
-        x_log_std = self.output_std(x)
+        x_log_std = self.output_log_std(x)
         return x_mean, x_log_std
     
     def get_dist_obj(self, y_mean, y_log_std):
@@ -83,12 +83,12 @@ class MeanVarianceModel(torch.nn.Module):
         super().__init__()
         self.base = BaseModel(input_size, hidden_sizes, dropout_prob=dropout_prob)
         self.output_mean = torch.nn.Linear(hidden_sizes[-1], output_size)
-        self.output_variance = torch.nn.Linear(hidden_sizes[-1], output_size)
+        self.output_log_variance = torch.nn.Linear(hidden_sizes[-1], output_size)
 
     def forward(self, x):
         x = self.base(x)
         x_mean = self.output_mean(x)
-        x_log_variance = self.output_variance(x)
+        x_log_variance = self.output_log_variance(x)
         return x_mean, x_log_variance
     
     def predict(self, x):
@@ -128,12 +128,12 @@ class MonteCarloDropoutMeanSTDModel(torch.nn.Module):
         super().__init__()
         self.base = BaseModel(input_size, hidden_sizes, dropout_prob=dropout_prob)
         self.output_mean = torch.nn.Linear(hidden_sizes[-1], output_size)
-        self.output_std = torch.nn.Linear(hidden_sizes[-1], output_size)
+        self.output_log_std = torch.nn.Linear(hidden_sizes[-1], output_size)
 
     def forward(self, x):
         x = self.base(x)
         x_mean = self.output_mean(x)
-        x_log_std = self.output_std(x)
+        x_log_std = self.output_log_std(x)
         return x_mean, x_log_std
     
     def get_dist_obj(self, y_mean, y_log_std):
