@@ -3,6 +3,7 @@
 This project compares neural network regression model approaches that also provide uncertainty estimation. It implements neural network models to predict concrete strength using PyTorch. The models are trained on the concrete strength dataset, utilizing Mean Squared Error (MSE) as the loss function in the baseine model and the Adam optimizer for training.
 
 **For more details refer to the [`./main.ipynb`](./main.ipynb) file.**
+**Medium post: https://medium.com/@nbamdadroshan/which-neural-net-knows-what-it-doesnt-know-a-study-on-uncertainty-estimation-in-regression-1901382dd9b0**
 
 ## Project Structure
 
